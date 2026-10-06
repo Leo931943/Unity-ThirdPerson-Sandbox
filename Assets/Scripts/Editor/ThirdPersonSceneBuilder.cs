@@ -93,6 +93,13 @@ namespace ThirdPersonDemo.Editor
         {
             EnsureDirectories();
 
+            // 防呆處理：先清理當前場景中已存在的玩家物件，防止多出第二個角色同步移動
+            var existingPlayers = Object.FindObjectsByType<ThirdPersonController>(FindObjectsSortMode.None);
+            foreach (var ep in existingPlayers)
+            {
+                Undo.DestroyObjectImmediate(ep.gameObject);
+            }
+
             Material matPlayer = GetOrCreateMaterial("M_Player", new Color(0.0f, 0.72f, 0.83f), 0.4f, 0.5f);
             Material matVisor = GetOrCreateMaterial("M_Visor", new Color(1.0f, 0.75f, 0.1f), 0.8f, 0.2f);
 
@@ -131,6 +138,11 @@ namespace ThirdPersonDemo.Editor
         [MenuItem("Tools/第三人稱場景 (Third Person)/3. 打開第三人稱遊玩場景 (Open Scene)", false, 3)]
         public static void OpenScene()
         {
+            if (EditorApplication.isPlaying)
+            {
+                EditorApplication.isPlaying = false;
+            }
+
             if (File.Exists(ScenePath))
             {
                 if (EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo())
@@ -145,6 +157,39 @@ namespace ThirdPersonDemo.Editor
                     BuildCompleteScene();
                 }
             }
+        }
+
+        [MenuItem("Tools/第三人稱場景 (Third Person)/4. 清理多餘的重複角色 (Clean Duplicate Players)", false, 4)]
+        public static void CleanDuplicatePlayersMenu()
+        {
+            CleanDuplicatePlayersInScene(false);
+        }
+
+        public static int CleanDuplicatePlayersInScene(bool silent = true)
+        {
+            var controllers = Object.FindObjectsByType<ThirdPersonController>(FindObjectsSortMode.None);
+            if (controllers.Length <= 1)
+            {
+                if (!silent)
+                {
+                    EditorUtility.DisplayDialog("提示", "目前場景中只有單一玩家角色，沒有重複角色需要清理。", "確定");
+                }
+                return 0;
+            }
+
+            int removed = 0;
+            for (int i = 1; i < controllers.Length; i++)
+            {
+                Undo.DestroyObjectImmediate(controllers[i].gameObject);
+                removed++;
+            }
+
+            Debug.Log($"<color=#00ff88>[ThirdPerson] 已成功清理 {removed} 個多餘的重複角色物件！</color>");
+            if (!silent)
+            {
+                EditorUtility.DisplayDialog("清理完成", $"已成功移除 {removed} 個多餘的玩家角色，現在只保留一個主角！", "確定");
+            }
+            return removed;
         }
 
         private static void EnsureDirectories()
@@ -225,6 +270,12 @@ namespace ThirdPersonDemo.Editor
             centerPlaza.transform.position = new Vector3(0f, 0.05f, 0f);
             centerPlaza.transform.localScale = new Vector3(12f, 0.1f, 12f);
             centerPlaza.GetComponent<Renderer>().sharedMaterial = matAccent;
+
+            // 核心修正：Unity 預設 PrimitiveType.Cylinder 帶有 CapsuleCollider。
+            // 由於扁平比例 (12, 0.1, 12)，PhysX 會將其判定為半徑 6 米的巨大隱形球體，
+            // 導致玩家踩不上去且無法靠近中間的水晶！此處替換為貼合網格的 MeshCollider。
+            Object.DestroyImmediate(centerPlaza.GetComponent<Collider>());
+            centerPlaza.AddComponent<MeshCollider>();
 
             // 3. 邊緣防護矮牆 (防止玩家不慎走出邊界)
             CreateBoundaryWalls(envRoot.transform, matBoundary);
@@ -434,9 +485,16 @@ namespace ThirdPersonDemo.Editor
 
                 gem.GetComponent<Renderer>().sharedMaterial = mat;
 
-                // 設為 Trigger 觸發器
-                Collider col = gem.GetComponent<Collider>();
-                col.isTrigger = true;
+                // 設為 Trigger 觸發器，使用球體觸發器以提供更舒適自然的收集判定
+                Object.DestroyImmediate(gem.GetComponent<Collider>());
+                SphereCollider sc = gem.AddComponent<SphereCollider>();
+                sc.isTrigger = true;
+                sc.radius = 0.8f;
+
+                // 加上 Kinematic Rigidbody 確保 PhysX 穩定觸發 Trigger 事件
+                Rigidbody rb = gem.AddComponent<Rigidbody>();
+                rb.isKinematic = true;
+                rb.useGravity = false;
 
                 gem.AddComponent<CollectibleItem>();
             }
@@ -458,6 +516,7 @@ namespace ThirdPersonDemo.Editor
 
             // 2. ThirdPersonController 移動邏輯腳本
             ThirdPersonController controller = player.AddComponent<ThirdPersonController>();
+            controller.jumpHeight = 2.6f;
             controller.spawnPosition = new Vector3(0f, 1.0f, 0f);
 
             // 3. 視覺外觀 (膠囊體)
@@ -545,6 +604,21 @@ namespace ThirdPersonDemo.Editor
         static ThirdPersonAutoInitializer()
         {
             EditorApplication.delayCall += CheckAndAutoBuild;
+            EditorApplication.hierarchyChanged += OnHierarchyChanged;
+        }
+
+        private static void OnHierarchyChanged()
+        {
+            if (EditorApplication.isPlayingOrWillChangePlaymode) return;
+            var controllers = Object.FindObjectsByType<ThirdPersonController>(FindObjectsSortMode.None);
+            if (controllers.Length > 1)
+            {
+                Debug.LogWarning($"<color=#ffaa00>[ThirdPerson] 檢測到編輯器場景中存在多餘的玩家角色 ({controllers.Length} 個)，已自動為您清理多餘副本！</color>");
+                for (int i = 1; i < controllers.Length; i++)
+                {
+                    Undo.DestroyObjectImmediate(controllers[i].gameObject);
+                }
+            }
         }
 
         private static void CheckAndAutoBuild()

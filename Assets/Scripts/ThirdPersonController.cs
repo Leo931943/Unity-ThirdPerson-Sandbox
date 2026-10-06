@@ -20,7 +20,7 @@ namespace ThirdPersonDemo
 
         [Header("跳躍與重力 (Jump & Gravity)")]
         [Tooltip("跳躍高度 (公尺)")]
-        public float jumpHeight = 1.6f;
+        public float jumpHeight = 2.6f;
 
         [Tooltip("重力加速度")]
         public float gravity = -22f;
@@ -38,6 +38,9 @@ namespace ThirdPersonDemo
 
         [Header("相機參考 (Camera Reference)")]
         public Transform cameraTransform;
+
+        // 單例快取：確保場景中僅有一個主角，避免多出重複角色一起移動
+        public static ThirdPersonController Instance { get; private set; }
 
         // 組件快取
         private CharacterController controller;
@@ -57,6 +60,15 @@ namespace ThirdPersonDemo
 
         private void Awake()
         {
+            // 防呆防重複：若場景中已有主角控制器，銷毀多餘的副本
+            if (Instance != null && Instance != this)
+            {
+                Debug.LogWarning($"[ThirdPersonController] 檢測到場景中已存在玩家角色，自動銷毀重複的物件 '{gameObject.name}'！");
+                Destroy(gameObject);
+                return;
+            }
+            Instance = this;
+
             controller = GetComponent<CharacterController>();
 
             if (cameraTransform == null && Camera.main != null)
@@ -65,6 +77,14 @@ namespace ThirdPersonDemo
             }
 
             spawnPosition = transform.position;
+        }
+
+        private void OnDestroy()
+        {
+            if (Instance == this)
+            {
+                Instance = null;
+            }
         }
 
         private void Update()
@@ -182,6 +202,31 @@ namespace ThirdPersonDemo
             verticalVelocity = 0f;
             currentSpeed = 0f;
             controller.enabled = true;
+        }
+
+        private void OnTriggerEnter(Collider other)
+        {
+            // 雙向觸發收集水晶，確保玩家碰觸時百分之百能吃到水晶
+            CollectibleItem item = other.GetComponent<CollectibleItem>();
+            if (item == null) item = other.GetComponentInParent<CollectibleItem>();
+            if (item != null)
+            {
+                item.Collect();
+            }
+        }
+
+        private void OnControllerColliderHit(ControllerColliderHit hit)
+        {
+            // 若 CharacterController 物理推進時撞擊到水晶亦能收集
+            if (hit.collider != null)
+            {
+                CollectibleItem item = hit.collider.GetComponent<CollectibleItem>();
+                if (item == null) item = hit.collider.GetComponentInParent<CollectibleItem>();
+                if (item != null)
+                {
+                    item.Collect();
+                }
+            }
         }
 
         private void OnDrawGizmosSelected()
